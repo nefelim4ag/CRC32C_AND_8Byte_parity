@@ -55,8 +55,6 @@ static struct parity128 parity_128(const void *data, uint64_t byte_len, struct p
         return parity;
 }
 
-//int parity_fix_error
-
 #define PAGE_SIZE (4*1024)
 
 int main() {
@@ -154,6 +152,100 @@ int main() {
                 printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
 
                 uint64_t new_xxhash64 = xxh64(ptr, PAGE_SIZE, orig_seed);
+                if (new_xxhash64 == orig_xxhash64) {
+                        printf("xxhash64: match\n");
+                } else {
+                        printf("xxhash64: not match\n");
+                }
+        }
+
+        /* Try add error and fix it */
+        printf("--- Example of stupid fix on 1 bit flip injection and fixup by CRC32C ---\n");
+
+        {
+                uint64_t orig_seed = 0xbadc3cc0de;
+                uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
+                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
+                uint32_t rand_offset = rand()%PAGE_SIZE;
+                uint32_t current_crc;
+                int search = 1;
+
+                printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+                PAGE[rand_offset] |= 0x2;
+                printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+
+                /* Brute force broken part */
+                start = clock()*1000000/CLOCKS_PER_SEC;
+                for (i = 0; i < PAGE_SIZE && search; i++) {
+                        for (int a = 7; a >= 0; a--) {
+                                uint8_t bit_invertor = 0x1 << a;
+
+                                PAGE[i] ^= bit_invertor;
+                                current_crc = crc32c(0, &PAGE, PAGE_SIZE);
+                                if (orig_crc == current_crc) {
+                                        printf("Fixed! sic!!!\n");
+                                        search = 0;
+                                        break;
+                                }
+                                PAGE[i] ^= bit_invertor;
+                        }
+                }
+                end = clock()*1000000/CLOCKS_PER_SEC;
+
+                if (!search)
+                        printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, orig_crc);
+
+                printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
+
+                uint64_t new_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
+                if (new_xxhash64 == orig_xxhash64) {
+                        printf("xxhash64: match\n");
+                } else {
+                        printf("xxhash64: not match\n");
+                }
+        }
+
+        /* Try add error and fix it */
+        printf("--- Example of stupid fix on 2 bit flip injection and fixup by CRC32C ---\n");
+
+        {
+                uint64_t orig_seed = 0xbadc3cc0de;
+                uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
+                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
+                uint32_t rand_offset = rand()%PAGE_SIZE;
+                uint32_t current_crc;
+                int search = 1;
+
+                printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+                PAGE[rand_offset] &= 252;
+                printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+
+                /* Brute force broken part */
+                start = clock()*1000000/CLOCKS_PER_SEC;
+                for (i = 0; i < PAGE_SIZE && search; i++) {
+                        for (int a = 7; a >= 0; a--) {
+                                uint8_t bit_invertor_1 = 0x1 << a;
+                                for (int b = 7; b >= 0; b--) {
+                                        uint8_t bit_invertor_sum = bit_invertor_1 | (0x1 << b);
+                                        PAGE[i] ^= bit_invertor_sum;
+                                        current_crc = crc32c(0, &PAGE, PAGE_SIZE);
+                                        if (orig_crc == current_crc) {
+                                                printf("Fixed! sic!!!\n");
+                                                search = 0;
+                                                break;
+                                        }
+                                        PAGE[i] ^= bit_invertor_sum;
+                                }
+                        }
+                }
+                end = clock()*1000000/CLOCKS_PER_SEC;
+
+                if (!search)
+                        printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, orig_crc);
+
+                printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
+
+                uint64_t new_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
                 if (new_xxhash64 == orig_xxhash64) {
                         printf("xxhash64: match\n");
                 } else {
