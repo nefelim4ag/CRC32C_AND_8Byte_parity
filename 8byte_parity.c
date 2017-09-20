@@ -10,13 +10,13 @@
 
 static uint32_t parity_32(uint8_t *data, uint64_t byte_len, uint32_t seed) {
         uint32_t parity = seed;
-        uint32_t step = sizeof(parity);
         uint32_t *ptr = (uint32_t *) data;
 
-        for (uint32_t i = 0; i < byte_len/step; i++) {
-                parity ^= *ptr;
-                ptr++;
-        }
+        if (byte_len%sizeof(parity) != 0)
+                printf("Not supported!\n");
+
+        for (uint32_t i = 0; i < byte_len/sizeof(parity); i++)
+                parity ^= ptr[i];
 
         return parity;
 }
@@ -28,9 +28,28 @@ static uint64_t parity_64(const void *data, uint64_t byte_len, uint64_t seed) {
         if (byte_len%sizeof(parity) != 0)
                 printf("Not supported!\n");
 
-        for (uint64_t i = 0; i < byte_len/sizeof(parity); i++) {
-                parity ^= *ptr;
-                ptr++;
+        for (uint64_t i = 0; i < byte_len/sizeof(parity); i++)
+                parity ^= ptr[i];
+
+        return parity;
+}
+
+struct parity128 {
+        uint64_t parity[2];
+};
+
+static struct parity128 parity_128(const void *data, uint64_t byte_len, struct parity128 seed) {
+        struct parity128 parity;
+        uint64_t *ptr = (uint64_t *) data;
+        parity.parity[0] = seed.parity[0];
+        parity.parity[1] = seed.parity[1];
+
+        if (byte_len%sizeof(parity) != 0)
+                printf("Not supported!\n");
+
+        for (uint64_t i = 0; i < byte_len/sizeof(ptr); i+=2) {
+                parity.parity[0] = ptr[i];
+                parity.parity[1] = ptr[i+1];
         }
 
         return parity;
@@ -56,6 +75,16 @@ int main() {
         printf("--- Test speed of hash/parity functions ---\n");
 
         printf("PAGE_SIZE: %u, loop count: %lu\n", PAGE_SIZE, iter);
+
+        {
+                struct parity128 parity;
+                parity.parity[0] = 0;
+                parity.parity[1] = 0;
+                start = clock()*1000000/CLOCKS_PER_SEC;
+                for (i = 0; i < iter; i++) { parity = parity_128((uint8_t *) &PAGE, PAGE_SIZE, parity); }
+                end = clock()*1000000/CLOCKS_PER_SEC;
+                printf("Parity128:\t0x%" PRIx64 "%" PRIx64 "\tperf: %lu µs,\tth: %f MiB/s\n", parity.parity[0], parity.parity[1], (end - start), PAGE_SIZE*iter*1.0/(end - start));
+        }
 
         {
                 uint64_t parity64;
@@ -126,8 +155,9 @@ int main() {
 
                 uint64_t new_xxhash64 = xxh64(ptr, PAGE_SIZE, orig_seed);
                 if (new_xxhash64 == orig_xxhash64) {
-                        printf("xxhash64: matched!\n");
-                        printf("Error was fixed!\n");
+                        printf("xxhash64: match\n");
+                } else {
+                        printf("xxhash64: not match\n");
                 }
         }
 
