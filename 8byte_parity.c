@@ -137,7 +137,7 @@ int main() {
         {
                 uint32_t parity32;
                 start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < iter; i++) { parity32 = fparity32((uint8_t *) &PAGE, PAGE_SIZE, 0); }
+                for (i = 0; i < iter; i++) { parity32 = fparity32((uint8_t *) &PAGE, PAGE_SIZE, i); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
                 printf("fparity32:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %.2f MiB/s\n", parity32, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
@@ -145,7 +145,7 @@ int main() {
         {
                 volatile uint64_t parity64;
                 start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < iter; i++) { parity64 = fparity64((uint8_t *) &PAGE, PAGE_SIZE, 0); }
+                for (i = 0; i < iter; i++) { parity64 = fparity64((uint8_t *) &PAGE, PAGE_SIZE, i); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
                 printf("fparity64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %.2f MiB/s\n", parity64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
@@ -176,10 +176,14 @@ int main() {
                 uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
                 uint64_t stripe_num = PAGE_SIZE/sizeof(orig_parity);
                 uint64_t *ptr = (uint64_t *) &PAGE;
+                uint32_t rand_offset = rand()%PAGE_SIZE;
 
-                printf("Stripe num: %lu\n", stripe_num);
+                printf("Stripe num: %lu by %lu byte\n", stripe_num, sizeof(orig_parity));
 
-                PAGE[rand()%PAGE_SIZE] = rand()%256;
+                printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+                PAGE[rand_offset] = rand()%256;
+                printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+                printf("At offset: %u, stripe: %lu\n", rand_offset, rand_offset/sizeof(orig_parity));
 
                 /* Brute force broken part */
                 start = clock()*1000000/CLOCKS_PER_SEC;
@@ -197,6 +201,7 @@ int main() {
                 }
                 end = clock()*1000000/CLOCKS_PER_SEC;
 
+                printf("ERR STRIPE: %lu\n", i);
                 printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i*sizeof(orig_parity), orig_crc);
 
                 printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
