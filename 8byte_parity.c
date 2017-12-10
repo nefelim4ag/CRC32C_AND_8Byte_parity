@@ -9,50 +9,125 @@
 #include "crc32.h"
 
 static uint32_t parity_32(uint8_t *data, uint64_t byte_len, uint32_t seed) {
-        uint32_t parity = seed;
+        uint32_t parity = 0;
         uint32_t *ptr = (uint32_t *) data;
 
         if (byte_len%sizeof(parity) != 0)
-                printf("Not supported!\n");
+                printf("Data size must be aligned to: %lu\n", sizeof(parity));
 
         for (uint32_t i = 0; i < byte_len/sizeof(parity); i++)
                 parity ^= ptr[i];
 
-        return parity;
+        return parity ^ seed;
+}
+
+/**
+ * fparity32 - use several registres for computing data 32-bit parity
+ * @data - input data stream
+ * @byte_len - input data lengh in bytes
+ * @seed - for altering parity value
+ */
+
+static uint32_t fparity32(const void *data, uint64_t byte_len, uint64_t seed) {
+        uint32_t p1 = 0, p2 = 0, p3 = 0, p4 = 0;
+        uint32_t *ptr = (uint32_t *) data;
+        uint64_t index, index_end;
+        uint32_t ret = 0;
+
+        if (byte_len%sizeof(ret)) {
+                printf("Data size must be aligned to: %lu\n", sizeof(ret));
+                return -1;
+        }
+
+        index_end = byte_len/sizeof(ret);
+
+        for (index = 0; index < index_end;) {
+                switch ((index - index_end)%4) {
+                        case 0:
+                                p1 ^= ptr[index++];
+                                p2 ^= ptr[index++];
+                                p3 ^= ptr[index++];
+                                p4 ^= ptr[index++];
+                        break;
+                        case 1:
+                                p1 ^= ptr[index++];
+                        break;
+                        case 2:
+                                p1 ^= ptr[index++];
+                                p2 ^= ptr[index++];
+                        break;
+                        case 3:
+                                p1 ^= ptr[index++];
+                                p2 ^= ptr[index++];
+                                p3 ^= ptr[index++];
+                        break;
+                }
+        }
+
+        ret = p1 ^ p2 ^ p3 ^ p4 ^ seed;
+
+        return ret;
 }
 
 static uint64_t parity_64(const void *data, uint64_t byte_len, uint64_t seed) {
-        uint64_t parity = seed;
+        uint64_t parity = 0;
         uint64_t *ptr = (uint64_t *) data;
 
         if (byte_len%sizeof(parity) != 0)
-                printf("Not supported!\n");
+                printf("Data size must be aligned to: %lu\n", sizeof(parity));
 
         for (uint64_t i = 0; i < byte_len/sizeof(parity); i++)
                 parity ^= ptr[i];
 
-        return parity;
+        return parity ^ seed;
 }
 
-struct parity128 {
-        uint64_t parity[2];
-};
+/**
+ * fparity64 - use several registres for computing data 64-bit parity
+ * @data - input data stream
+ * @byte_len - input data lengh in bytes
+ * @seed - for altering parity value
+ */
 
-static struct parity128 parity_128(const void *data, uint64_t byte_len, struct parity128 seed) {
-        struct parity128 parity;
+static uint64_t fparity64(const void *data, uint64_t byte_len, uint64_t seed) {
+        uint64_t p1 = 0, p2 = 0, p3 = 0, p4 = 0;
         uint64_t *ptr = (uint64_t *) data;
-        parity.parity[0] = seed.parity[0];
-        parity.parity[1] = seed.parity[1];
+        uint64_t index, index_end;
+        uint64_t ret = 0;
 
-        if (byte_len%sizeof(parity) != 0)
-                printf("Not supported!\n");
-
-        for (uint64_t i = 0; i < byte_len/sizeof(ptr); i+=2) {
-                parity.parity[0] = ptr[i];
-                parity.parity[1] = ptr[i+1];
+        if (byte_len%sizeof(ret)) {
+                printf("Data size must be aligned to: %lu\n", sizeof(ret));
+                return -1;
         }
 
-        return parity;
+        index_end = byte_len/sizeof(ret);
+
+        for (index = 0; index < index_end;) {
+                switch ((index - index_end)%4) {
+                        case 0:
+                                p1 ^= ptr[index++];
+                                p2 ^= ptr[index++];
+                                p3 ^= ptr[index++];
+                                p4 ^= ptr[index++];
+                        break;
+                        case 1:
+                                p1 ^= ptr[index++];
+                        break;
+                        case 2:
+                                p1 ^= ptr[index++];
+                                p2 ^= ptr[index++];
+                        break;
+                        case 3:
+                                p1 ^= ptr[index++];
+                                p2 ^= ptr[index++];
+                                p3 ^= ptr[index++];
+                        break;
+                }
+        }
+
+        ret = p1 ^ p2 ^ p3 ^ p4 ^ seed;
+
+        return ret;
 }
 
 #define PAGE_SIZE (4*1024)
@@ -66,30 +141,31 @@ int main() {
 
 
         iter *= 1024*1024*4/PAGE_SIZE;
+        iter += rand()%4096;
 
         for (uint32_t i = 0; i < PAGE_SIZE; i++)
-                PAGE[i] = rand()%256;
+                PAGE[i] = rand()%255;
 
         printf("--- Test speed of hash/parity functions ---\n");
 
         printf("PAGE_SIZE: %u, loop count: %lu\n", PAGE_SIZE, iter);
 
-        {
-                struct parity128 parity;
-                parity.parity[0] = 0;
-                parity.parity[1] = 0;
-                start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < iter; i++) { parity = parity_128((uint8_t *) &PAGE, PAGE_SIZE, parity); }
-                end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("Parity128:\t0x%" PRIx64 "%" PRIx64 "\tperf: %lu µs,\tth: %f MiB/s\n", parity.parity[0], parity.parity[1], (end - start), PAGE_SIZE*iter*1.0/(end - start));
-        }
-
+        /*
         {
                 uint64_t parity64;
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < iter; i++) { parity64 = parity_64((uint8_t *) &PAGE, PAGE_SIZE, 0); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
                 printf("Parity64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %f MiB/s\n", parity64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+        }
+        */
+
+        {
+                uint64_t parity64;
+                start = clock()*1000000/CLOCKS_PER_SEC;
+                for (i = 0; i < iter; i++) { parity64 = fparity64((uint8_t *) &PAGE, PAGE_SIZE, 0); }
+                end = clock()*1000000/CLOCKS_PER_SEC;
+                printf("FParity64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %f MiB/s\n", parity64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
 
         {
@@ -101,11 +177,19 @@ int main() {
         }
 
         {
+                uint32_t parity32;
+                start = clock()*1000000/CLOCKS_PER_SEC;
+                for (i = 0; i < iter; i++) { parity32 = fparity32((uint8_t *) &PAGE, PAGE_SIZE, 0); }
+                end = clock()*1000000/CLOCKS_PER_SEC;
+                printf("fparity32:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %f MiB/s\n", parity32, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+        }
+
+        {
                 uint32_t crc;
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < iter; i++) { crc = crc32c(0, &PAGE, PAGE_SIZE); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("crc32:\t\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %f MiB/s\n", crc, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+                printf("crc32hw:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %f MiB/s\n", crc, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
 
         {
@@ -136,7 +220,7 @@ int main() {
                 for (i = 0; i < stripe_num; i++) {
                         uint64_t stripe_backup = ptr[i];
                         ptr[i] = orig_parity;
-                        ptr[i] = parity_64((uint8_t *) ptr, PAGE_SIZE, orig_seed);
+                        ptr[i] = fparity64((uint8_t *) ptr, PAGE_SIZE, orig_seed);
                         uint32_t current_crc = crc32c(0, ptr, PAGE_SIZE);
                         if (orig_crc == current_crc) {
                                 break;
@@ -178,16 +262,14 @@ int main() {
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < PAGE_SIZE && search; i++) {
                         for (int a = 7; a >= 0; a--) {
-                                uint8_t bit_invertor = 0x1 << a;
-
-                                PAGE[i] ^= bit_invertor;
+                                PAGE[i] ^= 0x1 << a;
                                 current_crc = crc32c(0, &PAGE, PAGE_SIZE);
                                 if (orig_crc == current_crc) {
                                         printf("Fixed! sic!!!\n");
                                         search = 0;
                                         break;
                                 }
-                                PAGE[i] ^= bit_invertor;
+                                PAGE[i] ^= 0x1 << a;
                         }
                 }
                 end = clock()*1000000/CLOCKS_PER_SEC;
@@ -223,18 +305,16 @@ int main() {
                 /* Brute force broken part */
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < PAGE_SIZE && search; i++) {
-                        for (int a = 7; a >= 0; a--) {
-                                uint8_t bit_invertor_1 = 0x1 << a;
-                                for (int b = 7; b >= 0; b--) {
-                                        uint8_t bit_invertor_sum = bit_invertor_1 | (0x1 << b);
-                                        PAGE[i] ^= bit_invertor_sum;
+                        for (int a = 7; a; a--) {
+                                for (int b = a; b; b--) {
+                                        PAGE[i] ^= 0x1 << a | (0x1 << b);
                                         current_crc = crc32c(0, &PAGE, PAGE_SIZE);
                                         if (orig_crc == current_crc) {
                                                 printf("Fixed! sic!!!\n");
                                                 search = 0;
                                                 break;
                                         }
-                                        PAGE[i] ^= bit_invertor_sum;
+                                        PAGE[i] ^= 0x1 << a | (0x1 << b);
                                 }
                         }
                 }
