@@ -8,19 +8,6 @@
 #include "xxhash.h"
 #include "crc32.h"
 
-static uint32_t parity_32(uint8_t *data, uint64_t byte_len, uint32_t seed) {
-        uint32_t parity = 0;
-        uint32_t *ptr = (uint32_t *) data;
-
-        if (byte_len%sizeof(parity) != 0)
-                printf("Data size must be aligned to: %lu\n", sizeof(parity));
-
-        for (uint32_t i = 0; i < byte_len/sizeof(parity); i++)
-                parity ^= ptr[i];
-
-        return parity ^ seed;
-}
-
 /**
  * fparity32 - use several registres for computing data 32-bit parity
  * @data - input data stream
@@ -67,19 +54,6 @@ static uint32_t fparity32(const void *data, uint64_t byte_len, uint64_t seed) {
         ret = p1 ^ p2 ^ p3 ^ p4 ^ seed;
 
         return ret;
-}
-
-static uint64_t parity_64(const void *data, uint64_t byte_len, uint64_t seed) {
-        uint64_t parity = 0;
-        uint64_t *ptr = (uint64_t *) data;
-
-        if (byte_len%sizeof(parity) != 0)
-                printf("Data size must be aligned to: %lu\n", sizeof(parity));
-
-        for (uint64_t i = 0; i < byte_len/sizeof(parity); i++)
-                parity ^= ptr[i];
-
-        return parity ^ seed;
 }
 
 /**
@@ -161,27 +135,19 @@ int main() {
         */
 
         {
-                uint64_t parity64;
-                start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < iter; i++) { parity64 = fparity64((uint8_t *) &PAGE, PAGE_SIZE, 0); }
-                end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("FParity64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %f MiB/s\n", parity64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
-        }
-
-        {
-                uint32_t parity32;
-                start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < iter; i++) { parity32 = parity_32((uint8_t *) &PAGE, PAGE_SIZE, 0); }
-                end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("parity32:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %f MiB/s\n", parity32, (end - start), PAGE_SIZE*iter*1.0/(end - start));
-        }
-
-        {
                 uint32_t parity32;
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < iter; i++) { parity32 = fparity32((uint8_t *) &PAGE, PAGE_SIZE, 0); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("fparity32:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %f MiB/s\n", parity32, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+                printf("fparity32:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %.2f MiB/s\n", parity32, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+        }
+
+        {
+                volatile uint64_t parity64;
+                start = clock()*1000000/CLOCKS_PER_SEC;
+                for (i = 0; i < iter; i++) { parity64 = fparity64((uint8_t *) &PAGE, PAGE_SIZE, 0); }
+                end = clock()*1000000/CLOCKS_PER_SEC;
+                printf("fparity64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %.2f MiB/s\n", parity64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
 
         {
@@ -189,7 +155,7 @@ int main() {
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < iter; i++) { crc = crc32c(0, &PAGE, PAGE_SIZE); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("crc32hw:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %f MiB/s\n", crc, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+                printf("crc32hw:\t0x%" PRIx32 "\t\t\t\tperf: %lu µs,\tth: %.2f MiB/s\n", crc, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
 
         {
@@ -197,7 +163,7 @@ int main() {
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < iter; i++) { hash64 = xxh64(&PAGE, PAGE_SIZE, 0); }
                 end = clock()*1000000/CLOCKS_PER_SEC;
-                printf("xxhash64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %f MiB/s\n", hash64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
+                printf("xxhash64:\t0x%" PRIx64 "\t\t\tperf: %lu µs,\tth: %.2f MiB/s\n", hash64, (end - start), PAGE_SIZE*iter*1.0/(end - start));
         }
 
         /* Try add error and fix it */
@@ -205,7 +171,7 @@ int main() {
 
         {
                 uint64_t orig_seed = 0xbadc3cc0de;
-                uint64_t orig_parity = parity_64((uint8_t *) &PAGE, PAGE_SIZE, orig_seed);
+                uint64_t orig_parity = fparity64((uint8_t *) &PAGE, PAGE_SIZE, orig_seed);
                 uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
                 uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
                 uint64_t stripe_num = PAGE_SIZE/sizeof(orig_parity);
