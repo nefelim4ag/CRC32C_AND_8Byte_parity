@@ -106,6 +106,16 @@ static uint64_t fparity64(const void *data, uint64_t byte_len, uint64_t seed) {
 
 #define PAGE_SIZE (4*1024)
 
+#define ALIGN(x, y) ((x - x % y)/y)
+
+static inline uint8_t bitshift(int shift) {
+        static const uint8_t jump_table[8] = {
+                1 << 0, 1 << 1, 1 << 2, 1 << 3,
+                1 << 4, 1 << 5, 1 << 6, 1 << 7
+        };
+        return jump_table[shift % 8];
+}
+
 struct crc32_correction {
         /* Memory with crc32 missmatch */
         void *memory;
@@ -118,28 +128,40 @@ struct crc32_correction {
 };
 
 static void crc32_bitflip_corrector(struct crc32_correction *data) {
-        const size_t one_bit = 1;
-        size_t size = data->size;
-        size_t *ptr = (size_t *)data->memory;
-        size_t i = 0;
-        int a;
+        const size_t size = data->size;
+        const size_t bits_to_flip = data->size * 8;
 
-        /* Brute force err bit part */
-        while (i < size) {
-                a = 0;
-                while (a < sizeof(*ptr) * 8) {
-                        *ptr ^= one_bit << a;
-                        if (data->orig_crc == crc32c(0, data->memory, size)) {
-                                data->error_offset = i + (a - a % sizeof(*ptr)) / sizeof(*ptr);
-                                data->fixed = 1;
-                                return;
-                        }
-                        *ptr ^= one_bit << a;
-                        a++;
-                }
-                ptr++;
-                i += sizeof(*ptr);
+        char *ptr = (char *)data->memory;
+        unsigned i, j = 0;
+
+        /* Brute force 1-bit error */
+        for (i = 0; i < bits_to_flip; i++) {
+                ptr[ALIGN(i, 8)] ^= bitshift(i);
+                if (data->orig_crc == crc32c(0, data->memory, size))
+                        goto out;
+                ptr[ALIGN(i, 8)] ^= bitshift(i);
         }
+
+        printf("lol");
+
+        /* Brute force err 2-bits error */
+        for (i = 0; i < bits_to_flip; i++) {
+                ptr[ALIGN(i, 8)] ^= bitshift(i);
+                for (j = i + 1; j < bits_to_flip; j++) {
+                        ptr[ALIGN(j, 8)] ^= bitshift(j);
+                        if (data->orig_crc == crc32c(0, data->memory, size))
+                                goto out;
+                        ptr[ALIGN(j, 8)] ^= bitshift(j);
+                }
+                ptr[ALIGN(i, 8)] ^= bitshift(i);
+        }
+
+        return;
+
+        out:
+                printf("ERR OFFSET: 0x%" PRIx32 " 0x%" PRIx32 "\n", ALIGN(i, 8), ALIGN(j, 8));
+                data->error_offset = ALIGN(i, 8);
+                data->fixed = 1;
 }
 
 static void corrupt_random_bit(void *ptr, size_t size) {
@@ -218,29 +240,23 @@ int main() {
         printf("--- Example of error injection and fixup ---\n");
 
         {
-                uint64_t orig_seed = 0xbadc3cc0de;
-                uint64_t orig_parity = fparity64((uint8_t *) &PAGE, PAGE_SIZE, orig_seed);
-                uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
-                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
+                uint64_t orig_parity = fparity64((uint8_t *) &PAGE, PAGE_SIZE, 0);
+                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, 0);
                 uint64_t stripe_num = PAGE_SIZE/sizeof(orig_parity);
                 uint64_t *ptr = (uint64_t *) &PAGE;
-                uint32_t rand_offset = rand()%PAGE_SIZE;
 
                 printf("Stripe num: %lu by %lu byte\n", stripe_num, sizeof(orig_parity));
 
-                printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
-                PAGE[rand_offset] = rand()%256;
-                printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
-                printf("At offset: 0x%" PRIx32 ", stripe: %lu\n", rand_offset, rand_offset/sizeof(orig_parity));
+                corrupt_random_bit(&PAGE, PAGE_SIZE);
 
                 /* Brute force broken part */
                 start = clock()*1000000/CLOCKS_PER_SEC;
                 for (i = 0; i < stripe_num; i++) {
                         uint64_t stripe_backup = ptr[i];
                         ptr[i] = orig_parity;
-                        ptr[i] = fparity64((uint8_t *) ptr, PAGE_SIZE, orig_seed);
-                        uint32_t current_crc = crc32c(0, ptr, PAGE_SIZE);
-                        if (orig_crc == current_crc) {
+                        ptr[i] = fparity64((uint8_t *) ptr, PAGE_SIZE, 0);
+                        uint64_t new_xxhash64 = xxh64(ptr, PAGE_SIZE, 0);
+                        if (new_xxhash64 == orig_xxhash64) {
                                 break;
                         } else {
                                 ptr[i] = stripe_backup;
@@ -249,12 +265,11 @@ int main() {
                 }
                 end = clock()*1000000/CLOCKS_PER_SEC;
 
-                printf("ERR STRIPE: %lu\n", i);
-                printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i*sizeof(orig_parity), orig_crc);
+                printf("ERR OFFSET: 0x%" PRIx64 " probably fixed\n", i*sizeof(orig_parity));
 
                 printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
 
-                uint64_t new_xxhash64 = xxh64(ptr, PAGE_SIZE, orig_seed);
+                uint64_t new_xxhash64 = xxh64(ptr, PAGE_SIZE, 0);
                 if (new_xxhash64 == orig_xxhash64) {
                         printf("xxhash64: match\n");
                 } else {
@@ -300,42 +315,29 @@ int main() {
         printf("--- Example of stupid fix on 2 bit flip injection and fixup by CRC32C ---\n");
 
         {
-                uint64_t orig_seed = 0xbadc3cc0de;
-                uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
-                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
-                uint32_t current_crc;
-                int search = 1;
+                static struct crc32_correction info;
+                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, 0);
+
+                info.memory = &PAGE;
+                info.size = PAGE_SIZE;
+                info.orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
+                info.error_offset = 0;
+                info.fixed = 0;
 
                 corrupt_random_bit(&PAGE, PAGE_SIZE);
                 corrupt_random_bit(&PAGE, PAGE_SIZE);
 
-                printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, orig_crc);
-
-                /* Brute force broken part */
                 start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < PAGE_SIZE && search; i++) {
-                        for (int a = 7; a; a--) {
-                                for (int b = a; b; b--) {
-                                        PAGE[i] ^= 0x1 << a | (0x1 << b);
-                                        current_crc = crc32c(0, &PAGE, PAGE_SIZE);
-                                        if (orig_crc == current_crc) {
-                                                printf("Fixed! sic!!!\n");
-                                                search = 0;
-                                                break;
-                                        }
-                                        PAGE[i] ^= 0x1 << a | (0x1 << b);
-                                }
-                        }
-                }
+                crc32_bitflip_corrector(&info);
                 end = clock()*1000000/CLOCKS_PER_SEC;
 
-                if (!search)
-                        printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, orig_crc);
+                if (info.fixed)
+                        printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, info.orig_crc);
 
                 printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
-
-                uint64_t new_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
-                if (new_xxhash64 == orig_xxhash64) {
+                printf("perf: %lu ms,\tth: %f MiB/s\n", (end - start)/1000, PAGE_SIZE*i*1.0/(end - start));
+                printf("perf: %lu s,\tth: %f MiB/s\n", (end - start)/1000/1000, PAGE_SIZE*i*1.0/(end - start));
+                if (orig_xxhash64 == xxh64(&PAGE, PAGE_SIZE, 0)) {
                         printf("xxhash64: match\n");
                 } else {
                         printf("xxhash64: not match\n");
