@@ -12,7 +12,7 @@ crc32.o: crc32.c
 	$(CC) $(CFLAGS) -c $? -o $@
 
 8byte_parity: 8byte_parity.o xxhash.o crc32.o
-	$(CC) $(CFLAGS) -o $@ $?
+	$(CC) $(CFLAGS) -o $@ $^
 
 
 clean: ## Cleanup

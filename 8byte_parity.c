@@ -106,6 +106,54 @@ static uint64_t fparity64(const void *data, uint64_t byte_len, uint64_t seed) {
 
 #define PAGE_SIZE (4*1024)
 
+struct crc32_correction {
+        /* Memory with crc32 missmatch */
+        void *memory;
+        size_t size;
+        /* CRC32 to match */
+        unsigned orig_crc;
+        /* Byte offset with fixed error */
+        size_t error_offset;
+        int fixed:1;
+};
+
+static void crc32_bitflip_corrector(struct crc32_correction *data) {
+        const size_t one_bit = 1;
+        size_t size = data->size;
+        size_t *ptr = (size_t *)data->memory;
+        size_t i = 0;
+        int a;
+
+        /* Brute force err bit part */
+        while (i < size) {
+                a = 0;
+                while (a < sizeof(*ptr) * 8) {
+                        *ptr ^= one_bit << a;
+                        if (data->orig_crc == crc32c(0, data->memory, size)) {
+                                data->error_offset = i + (a - a % sizeof(*ptr)) / sizeof(*ptr);
+                                data->fixed = 1;
+                                return;
+                        }
+                        *ptr ^= one_bit << a;
+                        a++;
+                }
+                ptr++;
+                i += sizeof(*ptr);
+        }
+}
+
+static void corrupt_random_bit(void *ptr, size_t size) {
+        uint8_t *memory = (uint8_t *) ptr;
+        uint32_t rand_offset = rand() % size;
+        uint8_t old, new;
+        old = memory[rand_offset];
+        while (memory[rand_offset] == old) {
+                memory[rand_offset] |= 1 << rand() % 7;
+        }
+        new = memory[rand_offset];
+        printf("Byte at 0x%" PRIx32  ": 0x%" PRIx32 " -> 0x%" PRIx32 "\n", rand_offset, old, new);
+}
+
 int main() {
         uint8_t PAGE[PAGE_SIZE];
         uint64_t i;
@@ -183,7 +231,7 @@ int main() {
                 printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
                 PAGE[rand_offset] = rand()%256;
                 printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
-                printf("At offset: %u, stripe: %lu\n", rand_offset, rand_offset/sizeof(orig_parity));
+                printf("At offset: 0x%" PRIx32 ", stripe: %lu\n", rand_offset, rand_offset/sizeof(orig_parity));
 
                 /* Brute force broken part */
                 start = clock()*1000000/CLOCKS_PER_SEC;
@@ -218,40 +266,30 @@ int main() {
         printf("--- Example of stupid fix on 1 bit flip injection and fixup by CRC32C ---\n");
 
         {
-                uint64_t orig_seed = 0xbadc3cc0de;
+                static struct crc32_correction info;
+
                 uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
-                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
-                uint32_t rand_offset = rand()%PAGE_SIZE;
-                uint32_t current_crc;
-                int search = 1;
+                uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, 0);
 
-                printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
-                PAGE[rand_offset] |= 0x2;
-                printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+                corrupt_random_bit(&PAGE, PAGE_SIZE);
 
-                /* Brute force broken part */
+                info.memory = &PAGE;
+                info.size = PAGE_SIZE;
+                info.orig_crc = orig_crc;
+                info.error_offset = 0;
+                info.fixed = 0;
+
+
                 start = clock()*1000000/CLOCKS_PER_SEC;
-                for (i = 0; i < PAGE_SIZE && search; i++) {
-                        for (int a = 7; a >= 0; a--) {
-                                PAGE[i] ^= 0x1 << a;
-                                current_crc = crc32c(0, &PAGE, PAGE_SIZE);
-                                if (orig_crc == current_crc) {
-                                        printf("Fixed! sic!!!\n");
-                                        search = 0;
-                                        break;
-                                }
-                                PAGE[i] ^= 0x1 << a;
-                        }
-                }
+                crc32_bitflip_corrector(&info);
                 end = clock()*1000000/CLOCKS_PER_SEC;
 
-                if (!search)
-                        printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, orig_crc);
+                if (info.fixed)
+                        printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", info.error_offset, orig_crc);
 
-                printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), PAGE_SIZE*i*1.0/(end - start));
+                printf("perf: %lu µs,\tth: %f MiB/s\n", (end - start), info.error_offset * i * 1.0 / (end - start));
 
-                uint64_t new_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
-                if (new_xxhash64 == orig_xxhash64) {
+                if (orig_xxhash64 == xxh64(&PAGE, PAGE_SIZE, 0)) {
                         printf("xxhash64: match\n");
                 } else {
                         printf("xxhash64: not match\n");
@@ -265,13 +303,13 @@ int main() {
                 uint64_t orig_seed = 0xbadc3cc0de;
                 uint32_t orig_crc = crc32c(0, &PAGE, PAGE_SIZE);
                 uint64_t orig_xxhash64 = xxh64(&PAGE, PAGE_SIZE, orig_seed);
-                uint32_t rand_offset = rand()%PAGE_SIZE;
                 uint32_t current_crc;
                 int search = 1;
 
-                printf("Old byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
-                PAGE[rand_offset] &= 252;
-                printf("New byte: 0x%" PRIx32 "\n", PAGE[rand_offset]);
+                corrupt_random_bit(&PAGE, PAGE_SIZE);
+                corrupt_random_bit(&PAGE, PAGE_SIZE);
+
+                printf("ERR OFFSET: 0x%" PRIx64 "| Block CRC32c: 0x%" PRIx32 " - probably fixed\n", i, orig_crc);
 
                 /* Brute force broken part */
                 start = clock()*1000000/CLOCKS_PER_SEC;
